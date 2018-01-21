@@ -39,41 +39,50 @@ CHIP CPU {
         pc[15];          // address of next instruction
 
     PARTS:
+    /** Instruction type */
+    Not(in=instruction[15], out=isAddressInstruction);
+    Not(in=isAddressInstruction, out=isComputeInstruction);
+
     /** D register */
-    Register(in=ALUresult, load=instruction[11], out=D);
+    And(a=instruction[4], b=isComputeInstruction, out=loadD);
+    DRegister(in=ALUResult, load=loadD, out=D);
 
     /** A register */
-    Mux16(a=instruction, b=ALUresult, sel=instruction[0], out=instructionOrALUResult);
-    Not(in=instruction[0], out=isAddressInstruction);
-    Or(a=isAddressInstruction, b=instruction[10], out=shouldLoadAddr);
-    Register(in=instructionOrALUResult, load=shouldLoadAddr, out=A, out=addressM);
+    Mux16(a=instruction, b=ALUResult, sel=instruction[15], out=instructionOrALUResult);
+    Or(a=isAddressInstruction, b=instruction[5], out=shouldLoadAddr);
+    ARegister(in=instructionOrALUResult, load=shouldLoadAddr, out=A, out[0..14]=addressM);
 
     /** A/M selector **/
-    Mux16(a=A, b=inM, sel=instruction[3], out=AorM);
+    Mux16(a=A, b=inM, sel=instruction[12], out=AorM);
 
     /** ALU */
     ALU(x=D,
         y=AorM,
-        zx=instruction[4],
-        nx=instruction[5],
-        zy=instruction[6],
-        ny=instruction[7],
-        f=instruction[8],
-        no=instruction[9],
+        zx=instruction[11],
+        nx=instruction[10],
+        zy=instruction[9],
+        ny=instruction[8],
+        f=instruction[7],
+        no=instruction[6],
         out=outM,
-        out=ALUresult,
-        zr=zr,
-        ng=ng);
-    Nor(a=zr, b=ng, out=pos); // Create a positive status bit to simplify things
+        out=ALUResult,
+        zr=zer,
+        ng=neg);
+    // Create a positive status bit to simplify things
+    Or(a=zer, b=neg, out=invPos);
+    Not(in=invPos, out=pos);
 
     /** Jump logic */
-    And(a=ng, b=instruction[13], out=isNeg);
-    And(a=zr, b=instruction[14], out=isZero);
-    And(a=pos, b=instruction[15], out=isPos);
+    And(a=neg, b=instruction[2], out=isNeg);
+    And(a=zer, b=instruction[1], out=isZero);
+    And(a=pos, b=instruction[0], out=isPos);
     Or(a=isNeg, b=isPos, out=isNegOrPos);
     Or(a=isNegOrPos, b=isZero, out=shouldJump);
-    Not(in=shouldJump, out=notShouldJump);
+    And(a=shouldJump, b=isComputeInstruction, out=willJump);
 
     /** Program Counter */
-    PC(in=A, load=shouldJump, inc=notShouldJump, reset=reset);
+    PC(in=A, load=willJump, inc=true, reset=reset, out[0..14]=pc);
+
+    /** WriteM? */
+    And(a=instruction[3], b=isComputeInstruction, out=writeM);
 }
