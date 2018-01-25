@@ -5,6 +5,7 @@ class Parser {
         this.commandTypes = [
             Symbol('A_COMMAND'),
             Symbol('C_COMMAND'),
+            Symbol('L_COMMAND'),
         ];
 
         this.lines = this.cleanup(text);
@@ -13,15 +14,17 @@ class Parser {
 
     cleanup (text) {
         const allLines = text.split(/\r?\n/);
-        const lines = [];
+        const instructionLines = [];
 
         for (let i = 0; i < allLines.length; i++) {
-            if (allLines[i] === '') continue;
-            if (allLines[i].slice(0, 2) === '//') continue;
-            lines.push(allLines[i]);
+            let line = allLines[i];
+            line = line.replace(/\s*[//].+$/g, ''); // remove comments
+            line = line.trim();
+            if (line === '') continue;
+            instructionLines.push(line);
         }
 
-        return lines;
+        return instructionLines;
     }
 
     get line () {
@@ -31,9 +34,11 @@ class Parser {
     get commandType () {
         if (this.line[0] === '@') {
             return this.commandTypes[0];
+        } else if (this.line[0] === '(') {
+            return this.commandTypes[2];
+        } else {
+            return this.commandTypes[1];
         }
-
-        return this.commandTypes[1];
     }
 
     get isAInstruction () {
@@ -44,17 +49,25 @@ class Parser {
         return this.commandType === this.commandTypes[1];
     }
 
+    get isLInstruction () {
+        return this.commandType === this.commandTypes[2];
+    }
+
     get symbol () {
-        if (! this.isAInstruction) {
-            throw new Error('Only A instructions can contain symbols');
+        if (this.isAInstruction) {
+            return this.line.slice(1);
         }
 
-        return this.line.slice(1);
+        if (this.isLInstruction) {
+            return this.line.substring(1, this.line.length - 1);
+        }
+
+        throw new Error('Only A or L instructions contain symbols.');
     }
 
     get dest () {
         if (! this.isCInstruction) {
-            throw new Error('Only C instructions can contain destinations');
+            throw new Error('Only C instructions contain destinations.');
         }
 
         if (this.line.indexOf('=') === -1) {
@@ -66,7 +79,7 @@ class Parser {
 
     get comp () {
         if (! this.isCInstruction) {
-            throw new Error('Only C instructions can contain destinations');
+            throw new Error('Only C instructions contain destinations.');
         }
 
         if (this.line.match('=')) {
@@ -80,7 +93,7 @@ class Parser {
 
     get jmp () {
         if (! this.isCInstruction) {
-            throw new Error('Only C instructions can contain destinations');
+            throw new Error('Only C instructions contain destinations.');
         }
 
         if (this.line.indexOf(';') === -1) {
@@ -96,6 +109,10 @@ class Parser {
 
     advance () {
         this.ptr++;
+    }
+
+    reset () {
+        this.ptr = 0;
     }
 }
 
@@ -178,6 +195,38 @@ class Code {
     }
 }
 
+
+class SymbolTable {
+    constructor () {
+        this.table = new Map([
+            ['SP',      0],
+            ['LCL',     1],
+            ['ARG',     2],
+            ['THIS',    3],
+            ['THAT',    4],
+            ['SCREEN',  16384],
+            ['KBD',     24576],
+        ]);
+
+        for (let i = 0; i <= 15; i++) {
+            this.table.set(`R${i}`, i);
+        }
+    }
+
+    addEntry (symbol, address) {
+        this.table.set(symbol, address);
+    }
+
+    contains (symbol) {
+        return this.table.has(symbol);
+    }
+
+    getAddress (symbol) {
+        return this.table.get(symbol);
+    }
+}
+
+
 function main () {
     const argv = process.argv.splice(process.execArgv.length + 2);
 
@@ -188,10 +237,47 @@ function main () {
 
     const text = fs.readFileSync(argv[0], 'ascii');
     const parser = new Parser(text);
+    const symbols = new SymbolTable();
+    let romOffset = 0;
+    let ramOffset = 16;
+
+    /**
+     * First pass, builds symbol table
+     */
+    while (parser.hasMoreCommands) {
+        if (parser.isAInstruction || parser.isCInstruction) {
+            romOffset++;
+        } else if (parser.isLInstruction) {
+            symbols.addEntry(parser.symbol, romOffset);
+        }
+
+        parser.advance();
+    }
+
+    /**
+     * Second pass, parses ASM and generates words
+     */
+    parser.reset();
 
     while (parser.hasMoreCommands) {
         if (parser.isAInstruction) {
-            console.log('0' + Code.address(parser.symbol));
+            let address;
+
+            // Integer memory location
+            if (/^\d+$/.test(parser.symbol)) {
+                address = parser.symbol;
+            }
+            // Existing symbol in the table (labels and predefined)
+            else if (symbols.contains(parser.symbol)) {
+                address = symbols.getAddress(parser.symbol);
+            }
+            // New variable symbol
+            else {
+                symbols.addEntry(parser.symbol, ramOffset++);
+                address = symbols.getAddress(parser.symbol);
+            }
+
+            console.log('0' + Code.address(address));
         }
 
         if (parser.isCInstruction) {
